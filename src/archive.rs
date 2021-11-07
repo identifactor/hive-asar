@@ -1,10 +1,11 @@
+use crate::header::{FileMetadata, Header, HeaderEntry, Integrity};
 use std::borrow::BorrowMut;
 use std::io::SeekFrom;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, ReadBuf, Take};
-use crate::header::{Entry, FileMetadata, Header};
 
+/// A read-only asar archive.
 pub struct Archive<R: AsyncRead + AsyncSeek + Unpin> {
   offset: u64,
   header: Header,
@@ -26,15 +27,21 @@ impl<R: AsyncRead + AsyncSeek + Unpin> Archive<R> {
   }
 
   pub async fn get_file<'a>(&'a mut self, path: impl AsRef<str>) -> Option<File<'a, R>> {
+    let path = path.as_ref();
     let segments = path
-      .as_ref()
       .split('/')
       .filter(|x| !x.is_empty())
       .collect::<Vec<_>>();
+
     let result = self.header.search_segments(&segments);
-    if let Some(Entry::File(metadata)) = result {
-      self.reader.seek(SeekFrom::Start(self.offset + metadata.offset)).await.unwrap();
+    if let Some(HeaderEntry::File(metadata)) = result {
+      self
+        .reader
+        .seek(SeekFrom::Start(self.offset + metadata.offset))
+        .await
+        .unwrap();
       Some(File {
+        path: segments.join("/"),
         metadata: &metadata,
         reader: self.reader.borrow_mut().take(metadata.size)
       })
@@ -44,30 +51,41 @@ impl<R: AsyncRead + AsyncSeek + Unpin> Archive<R> {
   }
 }
 
+#[derive(Debug)]
 pub struct File<'a, R: AsyncRead + Unpin> {
+  path: String,
   metadata: &'a FileMetadata,
   reader: Take<&'a mut R>
 }
 
 impl<R: AsyncRead + Unpin> File<'_, R> {
-  pub fn metadata(&self) -> &FileMetadata {
-    self.metadata
+  pub fn name(&self) -> &str {
+    self.path.split('/').last().unwrap()
+  }
+
+  pub fn path(&self) -> &str {
+    &self.path
+  }
+
+  pub fn size(&self) -> u64 {
+    self.metadata.size
+  }
+
+  pub fn executable(&self) -> bool {
+    self.metadata.executable
+  }
+
+  pub fn integrity(&self) -> Option<&Integrity> {
+    self.metadata.integrity.as_ref()
   }
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for File<'_, R> {
-  fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context, buf: &mut ReadBuf) -> Poll<io::Result<()>> {
+  fn poll_read(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context,
+    buf: &mut ReadBuf
+  ) -> Poll<io::Result<()>> {
     Pin::new(&mut self.reader).poll_read(cx, buf)
   }
-}
-
-#[cfg(test)]
-#[tokio::test]
-async fn test() -> io::Result<()> {
-  let mut a = Archive::new(tokio::fs::File::open("a.asar").await?).await?;
-  let mut src = a.get_file("lib.rs").await.unwrap();
-  let mut code = String::with_capacity(src.metadata.size as _);
-  src.read_to_string(&mut code).await?;
-  println!("{}", code);
-  Ok(())
 }
