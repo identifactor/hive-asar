@@ -31,19 +31,20 @@ pub(crate) struct Directory {
 }
 
 impl Directory {
-  pub(crate) fn list(&mut self) -> impl Iterator<Item = String> + '_ {
+  pub(crate) fn file_paths(&self) -> impl Iterator<Item = String> + '_ {
     self
       .files
-      .iter_mut()
+      .iter()
       .map(|(name, entry)| -> Box<dyn Iterator<Item = _>> {
         match entry {
-          HeaderEntry::File(_metadata) => Box::from(std::iter::once(name.clone())),
-          HeaderEntry::Dir(dir) => Box::from(dir.list().map(|y| name.to_string() + "/" + &y))
+          HeaderEntry::File(_) => Box::from(std::iter::once(name.clone())),
+          HeaderEntry::Dir(dir) => Box::from(dir.file_paths().map(|y| name.to_string() + "/" + &y))
         }
       })
       .flatten()
   }
 }
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct FileMetadata {
@@ -56,17 +57,32 @@ pub(crate) struct FileMetadata {
   pub integrity: Option<Integrity>
 }
 
+/// Checksums of a file, containing the hash for the whole file as well as hashes
+/// for each block of data.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Integrity {
+  /// Hashing algorithm used in the file.
+  /// 
+  /// Currently only SHA256 is used in the file format.
   pub algorithm: Algorithm,
+
+  /// The hash for the whole file.
   pub hash: String,
+
+  /// Size of a block.
   #[serde(rename = "blockSize")]
   pub block_size: u32,
+
+  /// Hashes for each block of data containing `block_size` bytes.
   pub blocks: Vec<String>,
+
   #[serde(skip)]
   _priv: ()
 }
 
+/// Hashing algorithm used in asar archives.
+/// 
+/// Currently only SHA256 is used.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Algorithm {
   SHA256
